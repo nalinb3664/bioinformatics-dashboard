@@ -1,0 +1,13 @@
+bioinformatics-dashboard/
+│── backend/
+│   └── app.py
+│── src/
+│   └── ui/
+│       └── ExpressionViewer.jsx
+│── .gitignore
+│── Dockerfile
+│── requirements.txt
+│── package.json
+│── tailwind.config.js
+│── index.html
+│── README.md

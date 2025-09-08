@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bioinformatics Research Dashboard</title>
+    <!-- Tailwind Play CDN (for quick prototyping) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <!-- React + ReactDOM + Babel (for single-file demo) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      /* small custom styles */
+      html,body,#root{height: 97px;}
+      .card-shadow{box-shadow:0 18px 25px rgba(197, 215, 252, 0.08)}
+      /* simple tooltip */
+      .tooltip:hover::after{
+        content: attr(data-tip);
+        position: absolute;
+        background: rgba(236, 248, 3, 0.75);
+        color: rgb(166, 248, 239);
+        padding: 12px 12px;
+        border-radius: 12px;
+        font-size: 20px;
+        transform: translateY(-8px);
+      }
+    </style>
+  </head>
+  <body class="bg-gray-70 text-gray-80">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const {useState, useEffect, useRef} = React;
+
+      /********** Mock data **********/
+      const MOCK_DATASETS = {
+        "Dataset A": generateMockExpression(200, ['Healthy','Cancer','Treated']),
+        "Dataset B": generateMockExpression(150, ['Healthy','Cancer','Treated']),
+        "Dataset C": generateMockExpression(250, ['Control','Disease','Treated'])
+      };
+
+      function generateMockExpression(n=100, conditions=['A','B']){
+        const genes = ['TP53','BRCA1','BRCA2','EGFR','MYC','GAPDH','ACTB','MT-ND1'];
+        const rows = [];
+        for(let i=0;i<n;i++){
+          const gene = genes[Math.floor(Math.random()*genes.length)];
+          const cond = conditions[Math.floor(Math.random()*conditions.length)];
+          const value = Math.abs(Math.round((Math.random()*4 + (gene.length%3)) * (cond.includes('Cancer')||cond.includes('Disease') ? (1.5+Math.random()): (0.8+Math.random())) * 100)/100);
+          rows.push({sample:`S${i+1}`, gene, condition:cond, value});
+        }
+        return {genes:Array.from(new Set(rows.map(r=>r.gene))), conditions, rows};
+      }
+
+      const MOCK_VCF = `# Mock VCF\n##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n1\t12345\t.\tA\tT\t.\tPASS\t.\n2\t54321\t.\tG\tC\t.\tPASS\t.
+3\t11111\t.\tC\tT\t.\tPASS\t.
+X\t99999\t.\tT\tG\t.\tPASS\t.
+`;
+
+      function parseMockVCF(text){
+        const lines = text.split('\n').filter(l=>l && !l.startsWith('#'));
+        return lines.map((l,idx)=>{
+          const [chrom,pos,id,ref,alt] = l.split('\t');
+          // mock impact by random
+          const impacts = ['High','Moderate','Low','Modifier'];
+          return {chrom, pos: parseInt(pos), ref, alt, impact: impacts[idx % impacts.length], gene: ['TP53','BRCA1','MYC','EGFR'][idx % 4]};
+        });
+      }
+
+      /********** UI Components **********/
+      function Nav({onNavigate,active, mobileOpen, setMobileOpen}){
+        return (
+          <header className="sticky top-0 z-40 bg-bg-yellow/90 backdrop-blue border-b">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <div className="flex justify-between h-16 items-center">
+                <div className="flex items-center gap-4">
+                  <button className="text-2xl font-bold" onClick={()=>onNavigate('home')}>Bioinfomatics Dash</button>
+                  <nav className="hidden md:flex gap-2 items-center text-sm">
+                    {['home','expression','variants','about'].map(k=> (
+                      <a key={k} onClick={()=>onNavigate(k)} className={`px-3 py-2 rounded-md cursor-pointer ${active===k? 'bg-indigo-600 text-white':'text-gray-700 hover:bg-gray-100'}`}>{k[0].toUpperCase()+k.slice(1)}</a>
+                    ))}
+                  </nav>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="hidden sm:block">
+                    <input placeholder="Subscribe email" className="px-5 py-1 border rounded-md text-sm" />
+                    <button className="ml-2 px-3 py-2 rounded-md bg-indigo-600 text-white text-sm">Subscribe</button>
+                  </div>
+                  <button className="md:hidden p-2" onClick={()=>setMobileOpen(!mobileOpen)} aria-label="menu">☰</button>
+                </div>
+              </div>
+            </div>
+            {/* mobile menu */}
+            {mobileOpen && (
+              <div className="md:hidden border-t bg-white">
+                <div className="px-2 pt-2 pb-3 space-y-1">
+                  {['home','expression','variants','about'].map(k=> (
+                    <a key={k} onClick={()=>{onNavigate(k); setMobileOpen(false)}} className={`block px-3 py-2 rounded-md cursor-pointer ${active===k? 'bg-indigo-600 text-white':'text-gray-700 hover:bg-gray-100'}`}>{k[0].toUpperCase()+k.slice(1)}</a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </header>
+        )
+      }
+
+      function Hero({onStart}){
+        return (
+          <section className="max-w-7xl mx-auto p-6 lg:p-12">
+            <div className="grid md:grid-cols-2 gap-6 items-center">
+              <div>
+                <h1 className="text-3xl sm:text-4xl font-extrabold">Explore high-throughput gene expression and variant analysis in one platform.</h1>
+                <p className="mt-4 text-gray-600">A lightweight demo dashboard to visualize gene expression across conditions, filter variants, and simulate annotation — built for researchers.</p>
+                <div className="mt-6 flex gap-3">
+                  <button onClick={onStart} className="px-5 py-3 bg-indigo-600 text-white rounded-md">Start Exploring</button>
+                  <a className="px-5 py-3 border rounded-md text-sm" href="#readme">How it works</a>
+                </div>
+              </div>
+              <div className="bg-gradient-to-tr from-indigo-100 to-white p-6 rounded-2xl card-shadow">
+                <h3 className="font-semibold">Quick Stats</h3>
+                <div className="mt-4 grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-white rounded-lg card-shadow">
+                    <div className="text-sm text-gray-500">Datasets</div>
+                    <div className="text-xl font-bold">3</div>
+                  </div>
+                  <div className="p-4 bg-white rounded-lg card-shadow">
+                    <div className="text-sm text-gray-500">Samples (approx)</div>
+                    <div className="text-xl font-bold">~600</div>
+                  </div>
+                  <div className="p-4 bg-white rounded-lg card-shadow">
+                    <div className="text-sm text-gray-500">Genes (mock)</div>
+                    <div className="text-xl font-bold">8+</div>
+                  </div>
+                  <div className="p-4 bg-white rounded-lg card-shadow">
+                    <div className="text-sm text-gray-500">VCF Variants</div>
+                    <div className="text-xl font-bold">4+</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )
+      }
+
+      function Footer(){
+        return (
+          <footer className="mt-12 border-t bg-white/80">
+            <div className="max-w-7xl mx-auto p-6 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="text-sm">© {new Date().getFullYear()} BioDash — demo project</div>
+              <div className="flex gap-4 items-center">
+                <a className="text-sm text-indigo-600">About</a>
+                <a className="text-sm text-indigo-600">Contact</a>
+                <a className="text-sm">privacy</a>
+              </div>
+            </div>
+          </footer>
+        )
+      }
+
+      /********** Expression Viewer **********/
+      function ExpressionViewer({datasets}){
+        const [datasetName,setDatasetName] = useState(Object.keys(datasets)[0]);
+        const [selectedGene,setSelectedGene] = useState('TP53');
+        const [conditions,setConditions] = useState([]);
+        const [geneSearch, setGeneSearch] = useState('');
+        const [loading,setLoading] = useState(false);
+        const [logView,setLogView] = useState(false);
+
+        useEffect(()=>{
+          // init conditions based on dataset
+          const ds = datasets[datasetName];
+          setConditions(ds.conditions.slice());
+        },[datasetName]);
+
+        function draw(){
+          const ds = datasets[datasetName];
+          const rows = ds.rows.filter(r=> r.gene.toLowerCase() === selectedGene.toLowerCase() && (conditions.length===0 || conditions.includes(r.condition)));
+          // group by condition
+          const groups = {};
+          rows.forEach(r=>{
+            if(!groups[r.condition]) groups[r.condition]=[];
+            groups[r.condition].push(logView? Math.log2(r.value+1): r.value);
+          });
+          const traces = Object.keys(groups).map(cond=> ({
+            y: groups[cond],
+            type: 'box',
+            name: cond,
+            boxpoints: 'suspectedoutliers',
+            marker: {size:4}
+          }));
+          const layout = {title:`Expression of ${selectedGene} (${datasetName})`, yaxis:{title: logView? 'log2(expression+1)' : 'Expression'}};
+          Plotly.newPlot('expr-plot', traces.length? traces : [{y:[0], type:'box'}], layout, {responsive:true});
+        }
+
+        useEffect(()=>{ draw(); }, [datasetName, selectedGene, conditions, logView]);
+
+        // type-ahead suggestions
+        const geneSuggestions = (datasets[datasetName].genes||[]).filter(g=> g.toLowerCase().includes(geneSearch.toLowerCase())).slice(0,6);
+
+        return (
+          <div className="max-w-7xl mx-auto p-6">
+            <div className="flex flex-col lg:flex-row gap-6">
+              <aside className="w-full lg:w-1/4 bg-white rounded-lg p-4 card-shadow">
+                <h3 className="font-semibold">Filters</h3>
+                <div className="mt-3">
+                  <label className="block text-sm">Dataset</label>
+                  <select value={datasetName} onChange={(e)=>{setLoading(true); setDatasetName(e.target.value); setTimeout(()=>setLoading(false),500)}} className="mt-2 w-full px-3 py-2 border rounded-md">
+                    {Object.keys(datasets).map(d=> <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-sm">Condition Filter</label>
+                  <div className="mt-2 space-y-1">
+                    {datasets[datasetName].conditions.map(c=> (
+                      <div key={c} className="flex items-center gap-2">
+                        <input type="checkbox" id={`c-${c}`} checked={conditions.includes(c)} onChange={(e)=>{
+                          const next = e.target.checked? [...conditions, c] : conditions.filter(x=>x!==c);
+                          setConditions(next);
+                        }} />
+                        <label htmlFor={`c-${c}`} className="text-sm">{c}</label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-sm">Gene (type or choose)</label>
+                  <input className="mt-2 w-full px-3 py-2 border rounded-md" value={geneSearch} onChange={(e)=> setGeneSearch(e.target.value)} placeholder="Search gene..." />
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    {geneSuggestions.map(g=> (
+                      <button key={g} onClick={()=>{setSelectedGene(g); setGeneSearch('')}} className="px-2 py-1 text-sm border rounded">{g}</button>
+                    ))}
+                  </div>
+                  <div className="mt-3">
+                    <label className="text-sm">Selected gene</label>
+                    <input value={selectedGene} onChange={(e)=> setSelectedGene(e.target.value)} className="mt-1 w-full px-3 py-2 border rounded-md" />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center gap-2">
+                  <input type="checkbox" id="logview" checked={logView} onChange={(e)=> setLogView(e.target.checked)} />
+                  <label htmlFor="logview" className="text-sm">Log-normalized view</label>
+                </div>
+
+                <div className="mt-4">
+                  <button onClick={()=>draw()} className="px-4 py-2 bg-indigo-600 text-white rounded">Update Plot</button>
+                </div>
+
+              </aside>
+
+              <main className="w-full lg:w-3/4 bg-white rounded-lg p-4 card-shadow">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-semibold">Expression Viewer</h3>
+                  <div className="text-sm text-gray-500">Showing: <strong>{selectedGene}</strong></div>
+                </div>
+                <div className="mt-4 relative">
+                  {loading && <div className="absolute inset-0 flex items-center justify-center bg-white/70 z-10"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div></div>}
+                  <div id="expr-plot" style={{height: '420px'}}></div>
+                </div>
+
+              </main>
+            </div>
+          </div>
+        )
+      }
+
+      /********** Variant Explorer **********/
+      function VariantExplorer(){
+        const [vcfText, setVcfText] = useState(MOCK_VCF);
+        const [variants,setVariants] = useState(parseMockVCF(MOCK_VCF));
+        const [impactFilter, setImpactFilter] = useState('All');
+        const [page,setPage] = useState(1);
+        const [pageSize,setPageSize] = useState(5);
+        const [sortKey,setSortKey] = useState({key:'pos',dir:'asc'});
+        const [selectedVariant,setSelectedVariant] = useState(null);
+
+        useEffect(()=>{
+          setVariants(parseMockVCF(vcfText));
+          setPage(1);
+        },[vcfText]);
+
+        function uploadFake(e){
+          // simulate reading file
+          const f = e.target.files && e.target.files[0];
+          if(!f) return;
+          const reader = new FileReader();
+          reader.onload = ()=>{
+            setVcfText(reader.result);
+          }
+          reader.readAsText(f);
+        }
+
+        const filtered = variants.filter(v=> impactFilter==='All' ? true : v.impact===impactFilter);
+        // sorting
+        filtered.sort((a,b)=>{
+          const v = sortKey.dir === 'asc' ? 1 : -1;
+          if(a[sortKey.key] < b[sortKey.key]) return -1*v;
+          if(a[sortKey.key] > b[sortKey.key]) return 1*v;
+          return 0;
+        });
+        const totalPages = Math.max(1, Math.ceil(filtered.length/pageSize));
+        const pageItems = filtered.slice((page-1)*pageSize, page*pageSize);
+
+        function changeSort(key){
+          setSortKey(prev => prev.key === key ? {...prev, dir: prev.dir==='asc'?'desc':'asc'} : {key,dir:'asc'});
+        }
+
+        return (
+          <div className="max-w-7xl mx-auto p-6">
+            <div className="bg-white rounded-lg p-4 card-shadow">
+              <div className="flex flex-col md:flex-row justify-between gap-4">
+                <div>
+                  <h3 className="font-semibold">Variant Explorer</h3>
+                  <p className="text-sm text-gray-500">Upload a VCF file (mock) and inspect parsed variants. Click a row to annotate.</p>
+                </div>
+                <div className="flex gap-2 items-center">
+                  <label className="text-sm">Impact</label>
+                  <select value={impactFilter} onChange={(e)=>{setImpactFilter(e.target.value); setPage(1)}} className="px-2 py-1 border rounded">
+                    <option>All</option>
+                    <option>High</option>
+                    <option>Moderate</option>
+                    <option>Low</option>
+                    <option>Modifier</option>
+                  </select>
+                  <input type="file" accept=".vcf,.txt" onChange={uploadFake} className="text-sm" />
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-600">
+                      <th className="p-2 cursor-pointer" onClick={()=>changeSort('chrom')}>Chrom</th>
+                      <th className="p-2 cursor-pointer" onClick={()=>changeSort('pos')}>Pos {sortKey.key==='pos' && (sortKey.dir==='asc'?'↑':'↓')}</th>
+                      <th className="p-2">Ref</th>
+                      <th className="p-2">Alt</th>
+                      <th className="p-2 cursor-pointer" onClick={()=>changeSort('impact')}>Impact</th>
+                      <th className="p-2">Gene</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageItems.map((v,i)=> (
+                      <tr key={`${v.chrom}-${v.pos}`} className="border-t hover:bg-gray-50 cursor-pointer" onClick={()=>setSelectedVariant(v)}>
+                        <td className="p-2">{v.chrom}</td>
+                        <td className="p-2">{v.pos}</td>
+                        <td className="p-2">{v.ref}</td>
+                        <td className="p-2">{v.alt}</td>
+                        <td className="p-2">{v.impact}</td>
+                        <td className="p-2">{v.gene}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm">Page size</label>
+                  <select value={pageSize} onChange={(e)=>{setPageSize(parseInt(e.target.value)); setPage(1)}} className="px-2 py-1 border rounded">
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={()=>setPage(p=>Math.max(1,p-1))} className="px-2 py-1 border rounded">Prev</button>
+                  <div className="text-sm">{page} / {totalPages}</div>
+                  <button onClick={()=>setPage(p=>Math.min(totalPages,p+1))} className="px-2 py-1 border rounded">Next</button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Modal for annotation */}
+            {selectedVariant && (
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg p-6 w-11/12 md:w-2/3">
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-semibold">Annotation: {selectedVariant.gene} ({selectedVariant.chrom}:{selectedVariant.pos})</h3>
+                    <button onClick={()=>setSelectedVariant(null)} className="text-gray-500">✕</button>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 bg-gray-50 rounded">
+                      <div className="text-sm text-gray-600">Variant</div>
+                      <div className="mt-2 font-mono text-sm">{selectedVariant.chrom}:{selectedVariant.pos} {selectedVariant.ref}>{selectedVariant.alt}</div>
+                    </div>
+                    <div className="p-4 bg-gray-50 rounded">
+                      <div className="text-sm text-gray-600">Mock ClinVar</div>
+                      <div className="mt-2">No clinical data available in this demo. This modal simulates annotation output.</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex justify-end">
+                    <button onClick={()=>{alert('Annotate: mock API call');}} className="px-4 py-2 bg-indigo-600 text-white rounded">Annotate</button>
+                    <button onClick={()=>setSelectedVariant(null)} className="ml-2 px-4 py-2 border rounded">Close</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )
+      }
+
+      /********** About / Readme **********/
+      function About(){
+        return (
+          <div className="max-w-4xl mx-auto p-6">
+            <h3 className="text-2xl font-semibold">About this Demo</h3>
+            <p className="mt-4 text-gray-600">This is a single-file frontend demo for a Bioinformatics Research Dashboard. It includes:</p>
+            <ul className="list-disc ml-6 mt-2 text-gray-700">
+              <li>Landing page with hero</li>
+              <li>Expression viewer with boxplots (Plotly) and filters</li>
+              <li>Variant explorer with mock VCF parsing, sorting, pagination, and annotation modal</li>
+              <li>Responsive layout and small UX touches (loading spinner, type-ahead, tooltips)</li>
+            </ul>
+            <h4 className="mt-4 font-semibold">To run</h4>
+            <ol className="list-decimal ml-6 mt-2 text-gray-700">
+              <li>Save this HTML file and open in a modern browser (no build required)</li>
+              <li>Optionally integrate with Flask by serving this file from a static folder and exposing a JSON endpoint for real expression data</li>
+            </ol>
+
+            <h4 className="mt-4 font-semibold">Extensions (optional)</h4>
+            <p className="text-gray-700">Add Flask backend to serve real datasets, implement a proper VCF parser (pysam/pyvcf), and call real annotation services for variant annotation.</p>
+          </div>
+        )
+      }
+
+      /********** App Shell **********/
+      function App(){
+        const [page,setPage] = useState('home');
+        const [mobileOpen, setMobileOpen] = useState(false);
+        const [dark, setDark] = useState(false);
+
+        useEffect(()=>{ document.documentElement.classList.toggle('dark', dark); },[dark]);
+
+        return (
+          <div className={dark? 'dark': ''}>
+            <Nav onNavigate={setPage} active={page} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+            <main className="min-h-[70vh]">
+              {page==='home' && (
+                <>
+                  <Hero onStart={()=>setPage('expression')} />
+                  <div id="readme"></div>
+                </>
+              )}
+              {page==='expression' && <ExpressionViewer datasets={MOCK_DATASETS} />}
+              {page==='variants' && <VariantExplorer />}
+              {page==='about' && <About />}
+            </main>
+            <Footer />
+            <div className="fixed bottom-6 right-6">
+              <button onClick={()=>setDark(d=>!d)} className="px-3 py-2 bg-white border rounded shadow">{dark? 'Light':'Dark'}</button>
+            </div>
+          </div>
+        )
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+    </script>
+  </body>
+</html>
